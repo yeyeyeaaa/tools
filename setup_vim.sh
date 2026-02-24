@@ -27,6 +27,7 @@ set number
 set relativenumber
 set tabstop=4
 set shiftwidth=4
+set softtabstop=4
 set expandtab
 set smartindent
 set mouse=
@@ -86,6 +87,16 @@ execute "imap \<Esc>b \<Esc>bi"
 " Alt+Right 跳到下一个单词开头（普通/可视模式）
 execute "map \<Esc>f e"
 execute "imap \<Esc>f \<Esc>ea"
+
+" Enter 确认当前候选
+inoremap <silent><expr> <CR>
+      \ pumvisible() ? coc#_select_confirm()
+      \ : "\<CR>"
+
+" Tab 确认当前候选
+inoremap <silent><expr> <Tab>
+      \ pumvisible() ? coc#_select_confirm()
+      \ : "\<CR>"
 EOF
 
 # 安装插件
