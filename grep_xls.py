@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -7,7 +6,7 @@ from openpyxl import load_workbook
 
 # 要遍历的根目录
 ROOT_DIR = "/data/home/aaayeyeye/config/GameData/xls"
-TARGET_TEXT = "典藏球星自选礼盒"
+TARGET_TEXT = "ERaceRankPara"
 
 def scan_xlsx_files(root_dir):
     print(root_dir)

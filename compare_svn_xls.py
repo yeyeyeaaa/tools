@@ -129,6 +129,10 @@ class DiffViewer:
         self.offset_x = 0  # 水平滚动偏移
         self.offset_y = 0  # 垂直滚动偏移
         self.col_width = 20  # 列宽
+
+        # 光标位置（当前选中的单元格）
+        self.cursor_x = 0  # 数据列索引
+        self.cursor_y = 0  # 数据行索引
         
         # 当前 diff 位置缓存
         self.diff_positions: List[Tuple[int, int]] = []  # (row, col) 列表
@@ -139,6 +143,7 @@ class DiffViewer:
         self.COLOR_HEADER = 2
         self.COLOR_NORMAL = 3
         self.COLOR_STATUS = 4
+        self.COLOR_CURSOR = 5
     
     def init_colors(self):
         """初始化颜色方案"""
@@ -146,6 +151,7 @@ class DiffViewer:
         curses.init_pair(self.COLOR_HEADER, curses.COLOR_WHITE, curses.COLOR_BLUE)
         curses.init_pair(self.COLOR_NORMAL, curses.COLOR_WHITE, curses.COLOR_BLACK)
         curses.init_pair(self.COLOR_STATUS, curses.COLOR_BLACK, curses.COLOR_CYAN)
+        curses.init_pair(self.COLOR_CURSOR, curses.COLOR_BLACK, curses.COLOR_GREEN)
     
     def load_revisions(self) -> bool:
         """加载版本历史"""
@@ -268,6 +274,8 @@ class DiffViewer:
         
         # 更新视图位置
         row, col = self.diff_positions[self.current_diff_idx]
+        self.cursor_y = row
+        self.cursor_x = col
         self.offset_y = row
         self.offset_x = col
     
@@ -294,6 +302,8 @@ class DiffViewer:
         
         # 更新视图位置
         row, col = self.diff_positions[self.current_diff_idx]
+        self.cursor_y = row
+        self.cursor_x = col
         self.offset_y = row
         self.offset_x = col
     
@@ -360,6 +370,24 @@ class DiffViewer:
         data_start_row = 2
         visible_rows = height - data_start_row - 1  # 留一行给状态栏
         
+        # 获取当前 sheet 的最大行列，用于限制光标与滚动范围
+        max_rows = len(left_sheet)
+        max_cols = len(left_sheet[0]) if max_rows else 0
+        
+        # 限制光标范围
+        self.cursor_y = max(0, min(self.cursor_y, max_rows - 1)) if max_rows else 0
+        self.cursor_x = max(0, min(self.cursor_x, max_cols - 1)) if max_cols else 0
+        
+        # 让光标始终可见：调整滚动偏移
+        if self.cursor_y < self.offset_y:
+            self.offset_y = self.cursor_y
+        elif self.cursor_y >= self.offset_y + visible_rows:
+            self.offset_y = self.cursor_y - visible_rows + 1
+        if self.cursor_x < self.offset_x:
+            self.offset_x = self.cursor_x
+        elif self.cursor_x >= self.offset_x + visible_cols:
+            self.offset_x = self.cursor_x - visible_cols + 1
+        
         for screen_row in range(visible_rows):
             data_row = self.offset_y + screen_row
             
@@ -376,11 +404,16 @@ class DiffViewer:
                 cell = left_sheet[data_row][data_col]
                 x_pos = screen_col * self.col_width
                 y_pos = data_start_row + screen_row
+                is_cursor = (data_row == self.cursor_y and data_col == self.cursor_x)
                 
                 content = str(cell)[:self.col_width - 1].ljust(self.col_width - 1)
                 
                 try:
-                    if cell.changed:
+                    if is_cursor:
+                        stdscr.attron(curses.color_pair(self.COLOR_CURSOR))
+                        stdscr.addstr(y_pos, x_pos, content)
+                        stdscr.attroff(curses.color_pair(self.COLOR_CURSOR))
+                    elif cell.changed:
                         stdscr.attron(curses.color_pair(self.COLOR_CHANGED))
                         stdscr.addstr(y_pos, x_pos, content)
                         stdscr.attroff(curses.color_pair(self.COLOR_CHANGED))
@@ -405,11 +438,16 @@ class DiffViewer:
                 cell = right_sheet[data_row][data_col]
                 x_pos = half_width + screen_col * self.col_width
                 y_pos = data_start_row + screen_row
+                is_cursor = (data_row == self.cursor_y and data_col == self.cursor_x)
                 
                 content = str(cell)[:self.col_width - 1].ljust(self.col_width - 1)
                 
                 try:
-                    if cell.changed:
+                    if is_cursor:
+                        stdscr.attron(curses.color_pair(self.COLOR_CURSOR))
+                        stdscr.addstr(y_pos, x_pos, content)
+                        stdscr.attroff(curses.color_pair(self.COLOR_CURSOR))
+                    elif cell.changed:
                         stdscr.attron(curses.color_pair(self.COLOR_CHANGED))
                         stdscr.addstr(y_pos, x_pos, content)
                         stdscr.attroff(curses.color_pair(self.COLOR_CHANGED))
@@ -426,8 +464,8 @@ class DiffViewer:
         if self.diff_positions and self.current_diff_idx >= 0:
             diff_info += f" (当前: {self.current_diff_idx + 1}/{len(self.diff_positions)})"
         
-        status = f"位置: 行{self.offset_y + 1}, 列{self.offset_x + 1} | {diff_info} | "
-        status += f"方向键:移动 Tab:切换Sheet ]/[:跳转Diff N/P:切换版本 V:输入版本 Q:退出"
+        status = f"位置: 行{self.cursor_y + 1}, 列{self.cursor_x + 1} | {diff_info} | "
+        status += f"方向键:移动 Enter:查看详情 Tab:Sheet ]/[:Diff N/P:版本 V:输入 Q:退出"
         
         stdscr.attron(curses.color_pair(self.COLOR_STATUS))
         try:
@@ -439,6 +477,92 @@ class DiffViewer:
         stdscr.attroff(curses.color_pair(self.COLOR_STATUS))
         
         stdscr.refresh()
+    
+    def show_cell_detail(self, stdscr):
+        """弹出窗口显示当前光标单元格的完整内容（支持长文本换行与滚动）"""
+        if not self.sheet_names:
+            return
+        
+        current_sheet = self.sheet_names[self.current_sheet_idx]
+        left_sheet = self.left_data[current_sheet]
+        right_sheet = self.right_data[current_sheet]
+        
+        row, col = self.cursor_y, self.cursor_x
+        if row >= len(left_sheet) or col >= len(left_sheet[row]):
+            return
+        
+        rev_a = self.revisions[self.current_rev_idx][0]
+        rev_b = self.revisions[self.current_rev_idx + 1][0]
+        left_val = str(left_sheet[row][col])
+        right_val = str(right_sheet[row][col])
+        
+        height, width = stdscr.getmaxyx()
+        popup_h = min(height - 4, 26)
+        popup_w = min(width - 4, 100)
+        inner_w = max(10, popup_w - 4)  # 左右各留 2 个字符边距
+        
+        def wrap(text: str) -> List[str]:
+            lines = []
+            for para in text.split('\n'):
+                if para == '':
+                    lines.append('')
+                    continue
+                while len(para) > inner_w:
+                    lines.append(para[:inner_w])
+                    para = para[inner_w:]
+                lines.append(para)
+            return lines
+        
+        title = f"单元格详情  行{row + 1} 列{col + 1}  Sheet: {current_sheet}"
+        lines = [title, ""]
+        lines.append(f"── r{rev_a} (新版本) ──")
+        lines.extend(wrap(left_val) if left_val else ["(空)"])
+        lines.append("")
+        lines.append(f"── r{rev_b} (旧版本) ──")
+        lines.extend(wrap(right_val) if right_val else ["(空)"])
+        lines.append("")
+        lines.append("[↑/↓/PgUp/PgDn:滚动  Q/Esc/Enter:关闭]")
+        
+        top = 0
+        max_top = max(0, len(lines) - (popup_h - 2))
+        
+        popup = curses.newwin(popup_h, popup_w, (height - popup_h) // 2, (width - popup_w) // 2)
+        popup.keypad(True)
+        
+        while True:
+            popup.erase()
+            popup.box()
+            
+            for i in range(popup_h - 2):
+                line_idx = top + i
+                if line_idx >= len(lines):
+                    break
+                try:
+                    popup.addstr(i + 1, 2, lines[line_idx][:inner_w])
+                except curses.error:
+                    pass
+            
+            # 提示还有更多内容
+            if max_top > 0:
+                hint = f"[{top + 1}/{max_top + 1}]"
+                try:
+                    popup.addstr(popup_h - 1, popup_w - len(hint) - 2, hint)
+                except curses.error:
+                    pass
+            
+            popup.refresh()
+            
+            key = popup.getch()
+            if key in (ord('q'), ord('Q'), 27, ord('\n'), curses.KEY_ENTER):
+                break
+            elif key == curses.KEY_UP:
+                top = max(0, top - 1)
+            elif key == curses.KEY_DOWN:
+                top = min(max_top, top + 1)
+            elif key == curses.KEY_PPAGE:
+                top = max(0, top - (popup_h - 3))
+            elif key == curses.KEY_NPAGE:
+                top = min(max_top, top + (popup_h - 3))
     
     def get_version_input(self, stdscr) -> Optional[Tuple[int, int]]:
         """获取用户输入的版本号"""
@@ -499,26 +623,32 @@ class DiffViewer:
                 break
             
             elif key == curses.KEY_UP:
-                self.offset_y = max(0, self.offset_y - 1)
+                self.cursor_y = max(0, self.cursor_y - 1)
             
             elif key == curses.KEY_DOWN:
                 current_sheet = self.sheet_names[self.current_sheet_idx]
                 max_rows = len(self.left_data[current_sheet])
-                self.offset_y = min(max_rows - 1, self.offset_y + 1)
+                self.cursor_y = min(max_rows - 1, self.cursor_y + 1)
             
             elif key == curses.KEY_LEFT:
-                self.offset_x = max(0, self.offset_x - 1)
+                self.cursor_x = max(0, self.cursor_x - 1)
             
             elif key == curses.KEY_RIGHT:
                 current_sheet = self.sheet_names[self.current_sheet_idx]
                 max_cols = len(self.left_data[current_sheet][0]) if self.left_data[current_sheet] else 0
-                self.offset_x = min(max_cols - 1, self.offset_x + 1)
+                self.cursor_x = min(max_cols - 1, self.cursor_x + 1)
+            
+            elif key == ord('\n') or key == ord('d') or key == ord('D'):
+                # 回车或 D 键查看单元格完整内容
+                self.show_cell_detail(stdscr)
             
             elif key == ord('\t') or key == ord('s') or key == ord('S'):
                 # Tab 或 S 键切换 Sheet
                 self.current_sheet_idx = (self.current_sheet_idx + 1) % len(self.sheet_names)
                 self.offset_x = 0
                 self.offset_y = 0
+                self.cursor_x = 0
+                self.cursor_y = 0
                 self.update_diff_positions()  # 切换 Sheet 后更新 diff 位置
             
             elif key == ord(']'):
@@ -536,6 +666,8 @@ class DiffViewer:
                     if self.load_data(self.current_rev_idx, self.current_rev_idx + 1):
                         self.offset_x = 0
                         self.offset_y = 0
+                        self.cursor_x = 0
+                        self.cursor_y = 0
                         self.current_sheet_idx = 0
                         self.update_diff_positions()  # 切换版本后更新 diff 位置
             
@@ -546,6 +678,8 @@ class DiffViewer:
                     if self.load_data(self.current_rev_idx, self.current_rev_idx + 1):
                         self.offset_x = 0
                         self.offset_y = 0
+                        self.cursor_x = 0
+                        self.cursor_y = 0
                         self.current_sheet_idx = 0
                         self.update_diff_positions()  # 切换版本后更新 diff 位置
             
@@ -558,6 +692,8 @@ class DiffViewer:
                         self.current_rev_idx = idx_a
                         self.offset_x = 0
                         self.offset_y = 0
+                        self.cursor_x = 0
+                        self.cursor_y = 0
                         self.current_sheet_idx = 0
                         self.update_diff_positions()  # 切换版本后更新 diff 位置
 
@@ -567,7 +703,8 @@ def main():
     if len(sys.argv) < 2:
         print("用法: python svn_xls_diff.py <xls文件路径>")
         print("\n快捷键说明:")
-        print("  方向键: 上下左右移动")
+        print("  方向键: 移动光标选择单元格")
+        print("  Enter/D: 查看当前单元格完整内容（支持长文本）")
         print("  Tab/S: 切换 Sheet")
         print("  ]: 跳转到下一个 Diff 位置")
         print("  [: 跳转到上一个 Diff 位置")
